@@ -8,10 +8,10 @@ import { decideRoute } from "./engines/decisionEngine.js";
 --------------------------*/
 const TENANT_ID = "7e1d931c-a318-4d9d-8472-62e2437de1b0";
 const CLIENT_ID = "89f6a458-fc26-4cb5-9e1b-ee045588c093";
-const CLIENT = process.env.CLIENT_SECRET;
+const CLIENT_SECRET = "o~k8Q~PdbqWFkGMy898zFq5bE_gyaFzWHdWy3dt2";
 const MAILBOX = "support@puma.quantaops.com";
 // Backend API URL (default to localhost if not set)
-const API_URL = process.env.API_URL || "http://localhost:8000";
+const API_URL = process.env.API_URL || "https://puma-backend-demo-production.up.railway.app";
 
 /* -------------------------
    API HELPERS
@@ -163,6 +163,13 @@ Regards,<br>Puma Support
 `;
   },
 
+  order_not_found: (id) => `
+Hello,<br><br>
+We checked our records but could not find an order with ID <b>${id}</b>.<br>
+Please check if the Order ID is correct and reply with the valid ID (e.g., PUMA-12345).<br><br>
+Regards,<br>Puma Support
+`,
+
   // --- 2. Order Status (FCR) ---
   order_created: (id) => `
 Hello,<br><br>
@@ -235,10 +242,25 @@ To cancel your order instantly, please use our automated WhatsApp service:<br><b
 Regards,<br>Puma Support
 `,
 
+  address_change_success: (id, newAddress) => `
+Hello,<br><br>
+We have successfully updated the delivery address for your order <b>${id}</b> to:<br>
+<b>${newAddress}</b><br><br>
+You will receive the package at this new location.<br><br>
+Regards,<br>Puma Support
+`,
+
+  ask_new_address: (id) => `
+Hello,<br><br>
+We can help you change the delivery address for order <b>${id}</b>.<br>
+Please reply with the <b>complete new address</b> (including Pin Code) so we can update it immediately.<br><br>
+Regards,<br>Puma Support
+`,
+
   address_change_denied: () => `
 Hello,<br><br>
 We understand you wish to change your delivery address.<br>
-Currently, our system **does not support address changes** once an order is placed due to security/logistics constraints.<br><br>
+Currently, our system **does not support address changes** once an order is shipped due to logistics constraints.<br><br>
 Please coordinate directly with the courier partner once you receive the delivery SMS.<br><br>
 Regards,<br>Puma Support
 `,
@@ -295,7 +317,7 @@ Regards,<br>Puma Support
 /* -------------------------
    TEMPLATE DECIDER
 --------------------------*/
-function buildReply({ intent, risk, confidence, orderIds, decision, suggestedOrder, multipleOrders, orderData }) {
+function buildReply({ intent, risk, confidence, orderIds, decision, suggestedOrder, multipleOrders, orderData, entities }) {
   // 1. Risk Override
   if (risk) return templates.high_risk_escalation();
 
@@ -307,6 +329,11 @@ function buildReply({ intent, risk, confidence, orderIds, decision, suggestedOrd
   // 3. Missing Order ID check
   // Uses inferred ID if available
   const activeOrderId = orderIds[0] || suggestedOrder;
+
+  // 3b. Order ID Not Found in DB check
+  if (activeOrderId && !orderData) {
+    return templates.order_not_found(activeOrderId);
+  }
 
   // Force "Ask Order ID" for any intent that typically requires it, AND for generic unclear queries if no ID found
   // Updated list to include generic inquiries that might be order-related
@@ -342,6 +369,20 @@ function buildReply({ intent, risk, confidence, orderIds, decision, suggestedOrd
 
       // Dynamic Status Check
       const status = orderData?.status?.toLowerCase() || "processing";
+
+      // Strict Date Rule: If order is > 6 days old and NOT in terminal state, escalate to agent.
+      if (orderData?.created_at) {
+        const createdAt = new Date(orderData.created_at);
+        const ageInMs = new Date() - createdAt;
+        const ageInDays = ageInMs / (1000 * 60 * 60 * 24);
+
+        const isTerminal = ["delivered", "returned", "cancelled", "failed delivery"].includes(status);
+
+        if (ageInDays > 6 && !isTerminal) {
+          return templates.agent_handoff_stuck(id || "YOUR_ORDER");
+        }
+      }
+
       if (status === "created") return templates.order_created(id);
       if (status === "packed") return templates.order_packed(id);
       if (status === "delivered") return templates.order_delivered(id);
@@ -357,7 +398,32 @@ function buildReply({ intent, risk, confidence, orderIds, decision, suggestedOrd
       return templates.cancellation_whatsapp();
 
     case "address_change_request":
-      return templates.address_change_denied();
+      // Logic: 
+      // 1. If Shipped/Delivered -> DENY (Too late).
+      // 2. If Created/Packed -> ALLOW.
+      //    2a. If address found in email -> SUCCESS.
+      //    2b. If no address -> ASK.
+
+      {
+        const status = orderData?.status?.toLowerCase() || "processing";
+        const isTooLate = ["shipped", "delivered", "out for delivery", "returned"].includes(status);
+
+        if (isTooLate) {
+          return templates.address_change_denied();
+        } else {
+          // Check if AI extracted an address (using entities passed from main loop)
+          // Note: We need to pass 'entities' to buildReply first. 
+          // Assuming entities.new_address is available
+
+          const newAddress = entities?.new_address;
+
+          if (newAddress) {
+            return templates.address_change_success(id, newAddress);
+          } else {
+            return templates.ask_new_address(id);
+          }
+        }
+      }
 
     case "return_exchange_request":
       return templates.return_exchange();
@@ -518,7 +584,8 @@ async function processEmails() {
           decision,
           suggestedOrder,
           multipleOrders,
-          orderData // Pass the full order object
+          orderData, // Pass the full order object
+          entities: intentRes.entities // Pass extracted entities (new_address, etc.)
         });
 
         const replySent = await sendReply(emailId, replyBody);

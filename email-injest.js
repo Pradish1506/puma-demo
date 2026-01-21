@@ -6,7 +6,7 @@
 // ❗ MOVE THESE TO ENV VARS IN PROD
 const TENANT_ID = "7e1d931c-a318-4d9d-8472-62e2437de1b0";
 const CLIENT_ID = "89f6a458-fc26-4cb5-9e1b-ee045588c093";
-const CLIENT_SECRET = process.env.CLIENT_SECRET; // ROTATE THIS
+const CLIENT_SECRET = "o~k8Q~PdbqWFkGMy898zFq5bE_gyaFzWHdWy3dt2"; // ROTATE THIS
 
 const MAILBOX = "support@puma.quantaops.com";
 

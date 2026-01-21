@@ -1,7 +1,7 @@
 import { callLLM } from "../ai/llmClient.js";
 
 export async function detectIntent(email) {
-  const prompt = `
+   const prompt = `
   You are the **Senior Triage Specialist** for Puma L1 Support Automation.
 
   **OBJECTIVE**:
@@ -51,7 +51,10 @@ export async function detectIntent(email) {
   **OUTPUT FORMAT**:
   {
     "intent": "order_status",
-    "confidence": 0.95
+    "confidence": 0.95,
+    "entities": {
+        "new_address": "123 Main St, New York" // null if not found
+    }
   }
 
   **EMAIL**:
@@ -61,12 +64,12 @@ export async function detectIntent(email) {
   ${(email.body?.content || "").substring(0, 3000)}
   `;
 
-  try {
-    const res = await callLLM(prompt);
-    const cleaned = res.trim().replace(/^```json/, "").replace(/```$/, "").trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
-    console.error("Intent Engine Error:", e);
-    return { intent: "unknown", confidence: 0.1 };
-  }
+   try {
+      const res = await callLLM(prompt);
+      const cleaned = res.trim().replace(/^```json/, "").replace(/```$/, "").trim();
+      return JSON.parse(cleaned);
+   } catch (e) {
+      console.error("Intent Engine Error:", e);
+      return { intent: "unknown", confidence: 0.1 };
+   }
 }
