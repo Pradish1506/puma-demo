@@ -11,7 +11,7 @@ const CLIENT_ID = "89f6a458-fc26-4cb5-9e1b-ee045588c093";
 const CLIENT = process.env.CLIENT_SECRET;
 const MAILBOX = "support@puma.quantaops.com";
 // Backend API URL (default to localhost if not set)
-const API_URL = process.env.API_URL || "http://localhost:8000";
+const API_URL = process.env.API_URL || "https://puma-backend-demo-production.up.railway.app";
 
 /* -------------------------
    API HELPERS
@@ -570,3 +570,4 @@ async function startWorker() {
 }
 
 startWorker();
+
