@@ -4,14 +4,16 @@ import { detectRisk } from "./engines/riskEngine.js";
 import { decideRoute } from "./engines/decisionEngine.js";
 
 /* -------------------------
-   CONFIG
+   CONFIG (KEEP AS-IS)
 --------------------------*/
 const TENANT_ID = "7e1d931c-a318-4d9d-8472-62e2437de1b0";
 const CLIENT_ID = "89f6a458-fc26-4cb5-9e1b-ee045588c093";
-const CLIENT_SECRET = "o~k8Q~PdbqWFkGMy898zFq5bE_gyaFzWHdWy3dt2";
+const CLIENT = process.env.CLIENT_SECRET; // ✅ keep as-is (your crash already resolved)
 const MAILBOX = "support@puma.quantaops.com";
+
 // Backend API URL (default to localhost if not set)
-const API_URL = process.env.API_URL || "https://puma-backend-demo-production.up.railway.app";
+const API_URL =
+  process.env.API_URL || "https://puma-backend-demo-production.up.railway.app";
 
 /* -------------------------
    API HELPERS
@@ -58,12 +60,14 @@ async function getAccessToken() {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
+        // ✅ keep your current approach: use env secret value
+        client_secret: CLIENT,
         scope: "https://graph.microsoft.com/.default",
         grant_type: "client_credentials",
       }),
     }
   );
+
   const data = await res.json();
   if (!data.access_token) throw new Error("Failed to get token");
   return data.access_token;
@@ -118,32 +122,60 @@ function extractOrderIds(text = "") {
   return text.match(/\b\d{5,}\b/g) || [];
 }
 
+/**
+ * ✅ Puma requested: include Refund Number / ARN in replies (if available)
+ * We try common keys safely (no crash even if fields not present).
+ */
+function getRefundRef(orderData) {
+  return (
+    orderData?.arn_number ||
+    orderData?.refund_arn ||
+    orderData?.refund_reference ||
+    orderData?.refund_reference_number ||
+    orderData?.refund_number ||
+    orderData?.refund_id ||
+    null
+  );
+}
+
 /* -------------------------
-   EMAIL TEMPLATES (Aligned with L1 Automation Doc)
+   EMAIL TEMPLATES (Polite + Refund Ref)
 --------------------------*/
 const templates = {
   // --- 1. Information Seeking ---
   ask_order_id: () => `
 Hello,<br><br>
 Thank you for reaching out to Puma Support.<br>
-To assist you better, we need your <b>Order ID</b> (e.g., PUMA-123456).<br><br>
-Please reply with the correct Order ID so we can quickly check the status for you.<br><br>
-Regards,<br>Puma Support
+To assist you better, could you please share your <b>Order ID</b> (e.g., PUMA-123456)?<br><br>
+Once we have the Order ID, we will check and update you at the earliest.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   multiple_orders_found: (orders) => {
-    const rows = orders.map(o =>
-      `<tr>
-         <td style="border: 1px solid #ddd; padding: 8px;">${o.order_id}</td>
-         <td style="border: 1px solid #ddd; padding: 8px;">${o.items || 'Items'}</td>
-         <td style="border: 1px solid #ddd; padding: 8px;">${o.status}</td>
-         <td style="border: 1px solid #ddd; padding: 8px;">${o.created_at}</td>
-       </tr>`
-    ).join("");
+    const rows = orders
+      .map(
+        (o) => `
+      <tr>
+        <td style="border: 1px solid #ddd; padding: 8px;">${o.order_id}</td>
+        <td style="border: 1px solid #ddd; padding: 8px;">${
+          o.items || "Items"
+        }</td>
+        <td style="border: 1px solid #ddd; padding: 8px;">${
+          o.status || "NA"
+        }</td>
+        <td style="border: 1px solid #ddd; padding: 8px;">${
+          o.created_at || "NA"
+        }</td>
+      </tr>
+    `
+      )
+      .join("");
 
     return `
 Hello,<br><br>
-We noticed you have multiple recent orders with us. To assist you correctly, please reply with the specific <b>Order ID</b> from the list below:<br><br>
+Thank you for contacting Puma Support.<br>
+We found multiple recent orders linked to your email. Please reply with the specific <b>Order ID</b> from the list below so we can assist you correctly:<br><br>
 <table style="border-collapse: collapse; width: 100%;">
   <thead>
     <tr style="background-color: #f2f2f2;">
@@ -158,166 +190,179 @@ We noticed you have multiple recent orders with us. To assist you correctly, ple
   </tbody>
 </table>
 <br>
-Once you confirm the ID, we will proceed immediately.<br><br>
-Regards,<br>Puma Support
+Regards,<br>
+Puma Support
 `;
   },
-
-  order_not_found: (id) => `
-Hello,<br><br>
-We checked our records but could not find an order with ID <b>${id}</b>.<br>
-Please check if the Order ID is correct and reply with the valid ID (e.g., PUMA-12345).<br><br>
-Regards,<br>Puma Support
-`,
 
   // --- 2. Order Status (FCR) ---
   order_created: (id) => `
 Hello,<br><br>
-Your order <b>${id}</b> is confirmed! 🎉<br>
-It normally takes <b>1-2 business days</b> to pack and dispatch your items.<br>
-You will receive a notification as soon as it ships.<br><br>
-Regards,<br>Puma Support
+Thank you for your order! Your order <b>${id}</b> is confirmed. 🎉<br>
+It typically takes <b>1–2 business days</b> to pack and dispatch your items.<br>
+You will receive an update as soon as it ships.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   order_packed: (id) => `
 Hello,<br><br>
 Good news! Your order <b>${id}</b> has been packed and is ready for pickup by our courier partner.<br>
 It should ship within the next 24 hours.<br><br>
-Regards,<br>Puma Support
+Regards,<br>
+Puma Support
 `,
 
   order_shipped: (id, link = "#") => `
 Hello,<br><br>
 Your order <b>${id}</b> is on the way! 🚚<br>
 You can track your package here: <a href="${link}">Track Order</a><br><br>
-Expected delivery is within 3-5 days.<br><br>
-Regards,<br>Puma Support
+Regards,<br>
+Puma Support
 `,
 
   delivery_attempt_failed: (id) => `
 Hello,<br><br>
-We noticed a failed delivery attempt for your order <b>${id}</b>.<br>
-Don't worry, our courier partner will attempt delivery again on the next business day.<br>
-Please ensure someone is available to receive the package.<br><br>
-Regards,<br>Puma Support
+We noticed a delivery attempt was not successful for your order <b>${id}</b>.<br>
+Our courier partner will attempt delivery again on the next business day. Kindly ensure someone is available to receive the package.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   order_delivered: (id) => `
 Hello,<br><br>
 Our records show that your order <b>${id}</b> has been delivered.<br>
-If you haven't received it, please let us know immediately.<br><br>
-Regards,<br>Puma Support
+If you have not received it, please reply to this email and we will assist you on priority.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   order_returned: (id) => `
 Hello,<br><br>
 We have received your return for order <b>${id}</b>.<br>
-Your refund is being processed and should reflect within 5-7 business days.<br><br>
-Regards,<br>Puma Support
+Your refund is being processed and should reflect within <b>5–7 business days</b>.<br><br>
+Regards,<br>
+Puma Support
 `,
 
-  // --- 3. Order Status (Agent Handoff / Exceptions) ---
+  // --- 3. Agent Handoff / Exceptions ---
   agent_handoff_generic: (id) => `
 Hello,<br><br>
-We are looking into your query${id ? ` regarding order <b>${id}</b>` : ""}.<br>
-One of our support specialists has been assigned to your case and will revert with an update shortly.<br><br>
-Thank you for your patience.<br><br>
-Regards,<br>Puma Support
+Thank you for writing to us${
+    id ? ` regarding order <b>${id}</b>` : ""
+  }. <br>
+A support specialist has been assigned and will get back to you shortly.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   agent_handoff_stuck: (id) => `
 Hello,<br><br>
-We apologize for the delay with order <b>${id}</b>.<br>
-We have escalated this to our logistics team to investigate the movement status.<br>
-You will hear from us soon with a resolution.<br><br>
-Regards,<br>Puma Support
+We’re sorry for the inconvenience. We are investigating the movement status for order <b>${id}</b> with our logistics partner.<br>
+Our team will update you at the earliest with a resolution.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   // --- 4. Cancellation & corrections ---
   cancellation_whatsapp: () => `
 Hello,<br><br>
-To cancel your order instantly, please use our automated WhatsApp service:<br><br>
+To cancel your order quickly, please use our automated WhatsApp service:<br><br>
 👉 <a href="https://wa.me/puma_support?text=cancel"><b>Click here to Cancel Order on WhatsApp</b></a><br><br>
-(Note: Cancellation is only possible before the order is shipped.)<br><br>
-Regards,<br>Puma Support
-`,
-
-  address_change_success: (id, newAddress) => `
-Hello,<br><br>
-We have successfully updated the delivery address for your order <b>${id}</b> to:<br>
-<b>${newAddress}</b><br><br>
-You will receive the package at this new location.<br><br>
-Regards,<br>Puma Support
-`,
-
-  ask_new_address: (id) => `
-Hello,<br><br>
-We can help you change the delivery address for order <b>${id}</b>.<br>
-Please reply with the <b>complete new address</b> (including Pin Code) so we can update it immediately.<br><br>
-Regards,<br>Puma Support
+Note: Cancellation is only possible before the order is shipped.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   address_change_denied: () => `
 Hello,<br><br>
-We understand you wish to change your delivery address.<br>
-Currently, our system **does not support address changes** once an order is shipped due to logistics constraints.<br><br>
-Please coordinate directly with the courier partner once you receive the delivery SMS.<br><br>
-Regards,<br>Puma Support
+Thank you for your request.<br>
+Currently, we do not support address changes once an order is placed due to security and logistics constraints.<br>
+Once you receive the courier SMS, you may coordinate directly with the courier partner.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   // --- 5. Refunds (FCR) ---
-  refund_in_sla: (id) => `
+  refund_in_sla: (id, ref = null) => `
 Hello,<br><br>
 Your refund for order <b>${id}</b> has been initiated.<br>
-<b>Timeline:</b> Refunds are initiated within 3 days of return pickup and typically reflect in your bank account within **5–7 business days** after that.<br><br>
-If you do not see the credit by then, please let us know.<br><br>
-Regards,<br>Puma Support
+Refunds are typically credited within <b>5–7 business days</b> after initiation.<br>
+${ref ? `<b>Refund Reference / ARN:</b> ${ref}<br>` : ""}
+If you do not see the credit after the timeline, please reply here and we will assist you further.<br><br>
+Regards,<br>
+Puma Support
 `,
 
-  refund_processed: (id, arn = "N/A") => `
+  refund_processed: (id, ref = "N/A") => `
 Hello,<br><br>
-Your refund for order <b>${id}</b> has been successfully processed.<br>
-<b>Bank Reference (ARN):</b> ${arn}<br><br>
-Please check your bank statement. If not visible, contact your bank with this ARN number.<br><br>
-Regards,<br>Puma Support
+Your refund for order <b>${id}</b> has been processed successfully.<br>
+<b>Refund Reference / ARN:</b> ${ref}<br><br>
+If the amount is not visible yet, kindly check with your bank using the above reference number.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   // --- 6. Refunds (Agent Handoff) ---
-  refund_issue_handoff: (id) => `
+  refund_issue_handoff: (id, ref = null) => `
 Hello,<br><br>
 We apologize for the delay in your refund for order <b>${id}</b>.<br>
-We have assigned this to our Finance Team to verify the transaction status.<br>
-We will update you as soon as we have confirmation.<br><br>
-Regards,<br>Puma Support
+${ref ? `<b>Refund Reference / ARN:</b> ${ref}<br>` : ""}
+We have assigned this to our Finance Team for verification and will update you as soon as we have confirmation.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   // --- 7. Risk / Other ---
   high_risk_escalation: () => `
 Hello,<br><br>
-We have received your email and it has been flagged for prioritized review.<br>
-A Senior Support Specialist will be assessing your concern and will contact you directly.<br><br>
-Regards,<br>Puma Support
+Thank you for reaching out. Your email has been flagged for prioritized review.<br>
+A senior support specialist will review your concern and contact you shortly.<br><br>
+Regards,<br>
+Puma Support
 `,
 
   unclear_intent: () => `
 Hello,<br><br>
-We definitely want to help, but we didn't fully understand your request.<br>
-Could you please share more details or your Order ID so we can assist you?<br><br>
-Regards,<br>Puma Support
+Thank you for writing to Puma Support.<br>
+We want to assist you, but we need a bit more information. Could you please share your <b>Order ID</b> and a brief description of the issue?<br><br>
+Regards,<br>
+Puma Support
 `,
 
   invoice_shared: (id) => `
 Hello,<br><br>
-We have triggered a request for your invoice for order <b>${id}</b>.<br>
-It will be sent to your registered email address shortly.<br><br>
-Regards,<br>Puma Support
-`
+We have initiated the invoice request for order <b>${id}</b>.<br>
+It will be shared to your registered email address shortly.<br><br>
+Regards,<br>
+Puma Support
+`,
+
+  // ✅ You were calling this earlier; adding it prevents runtime issues for that intent.
+  return_exchange: (id = "") => `
+Hello,<br><br>
+Thank you for reaching out.${
+    id ? ` We have noted your request for order <b>${id}</b>.` : ""
+  }<br>
+Our support team will assist you with the return or exchange process shortly.<br><br>
+Regards,<br>
+Puma Support
+`,
 };
 
 /* -------------------------
    TEMPLATE DECIDER
 --------------------------*/
-function buildReply({ intent, risk, confidence, orderIds, decision, suggestedOrder, multipleOrders, orderData, entities }) {
+function buildReply({
+  intent,
+  risk,
+  confidence,
+  orderIds,
+  decision,
+  suggestedOrder,
+  multipleOrders,
+  orderData,
+}) {
   // 1. Risk Override
   if (risk) return templates.high_risk_escalation();
 
@@ -327,106 +372,64 @@ function buildReply({ intent, risk, confidence, orderIds, decision, suggestedOrd
   }
 
   // 3. Missing Order ID check
-  // Uses inferred ID if available
   const activeOrderId = orderIds[0] || suggestedOrder;
 
-  // 3b. Order ID Not Found in DB check
-  if (activeOrderId && !orderData) {
-    return templates.order_not_found(activeOrderId);
-  }
-
-  // Force "Ask Order ID" for any intent that typically requires it, AND for generic unclear queries if no ID found
-  // Updated list to include generic inquiries that might be order-related
   const intentsNeedingId = [
     "order_status",
     "refund_not_received",
     "invoice_request",
     "report_problem",
     "delivery_issue",
-    "payment_issue"
+    "payment_issue",
+    "return_exchange_request",
   ];
 
   const needsOrderId = intentsNeedingId.includes(intent);
 
-  if (!activeOrderId) {
-    if (needsOrderId) return templates.ask_order_id();
+  if (!activeOrderId && needsOrderId) return templates.ask_order_id();
 
-    // Logic: If intent is unknown/generic but confidence is low or it looks like a complaint, 
-    // it's safer to ask for Order ID than to send a generic "Agent Assigned" message without context.
-    if (intent === "unknown" || decision?.owner === "agent") {
-      // Optional: You can decide to ask for ID here too. 
-      // For now, let's allow generic agent handoff but WITHOUT the invalid ID.
-    }
-  }
+  const id = activeOrderId || "";
+  const isAgentHandoff =
+    decision?.owner === "agent" || decision?.owner === "senior_support";
 
-  const id = activeOrderId || ""; // Default to empty string if missing, so template handles it
-  const isAgentHandoff = decision?.owner === "agent" || decision?.owner === "senior_support";
+  const refundRef = getRefundRef(orderData);
 
   // 4. Intent Routing
   switch (intent) {
-    case "order_status":
-      if (isAgentHandoff) return templates.agent_handoff_stuck(id || "YOUR_ORDER");
+    case "order_status": {
+      if (isAgentHandoff)
+        return templates.agent_handoff_stuck(id || "YOUR_ORDER");
 
-      // Dynamic Status Check
       const status = orderData?.status?.toLowerCase() || "processing";
-
-      // Strict Date Rule: If order is > 6 days old and NOT in terminal state, escalate to agent.
-      if (orderData?.created_at) {
-        const createdAt = new Date(orderData.created_at);
-        const ageInMs = new Date() - createdAt;
-        const ageInDays = ageInMs / (1000 * 60 * 60 * 24);
-
-        const isTerminal = ["delivered", "returned", "cancelled", "failed delivery"].includes(status);
-
-        if (ageInDays > 6 && !isTerminal) {
-          return templates.agent_handoff_stuck(id || "YOUR_ORDER");
-        }
-      }
-
       if (status === "created") return templates.order_created(id);
       if (status === "packed") return templates.order_packed(id);
       if (status === "delivered") return templates.order_delivered(id);
       if (status === "returned") return templates.order_returned(id);
 
-      return templates.order_shipped(id); // Default to Shipped (most common FCR)
+      return templates.order_shipped(id);
+    }
 
-    case "refund_not_received":
-      if (isAgentHandoff) return templates.refund_issue_handoff(id || "YOUR_ORDER");
-      return templates.refund_in_sla(id);
+    case "refund_not_received": {
+      if (isAgentHandoff)
+        return templates.refund_issue_handoff(id || "YOUR_ORDER", refundRef);
+
+      // If your order API has refund_status, show processed template when applicable
+      const refundStatus = (orderData?.refund_status || "").toLowerCase();
+      if (refundStatus === "processed" || refundStatus === "success") {
+        return templates.refund_processed(id, refundRef || "N/A");
+      }
+
+      return templates.refund_in_sla(id, refundRef);
+    }
 
     case "cancellation_request":
       return templates.cancellation_whatsapp();
 
     case "address_change_request":
-      // Logic: 
-      // 1. If Shipped/Delivered -> DENY (Too late).
-      // 2. If Created/Packed -> ALLOW.
-      //    2a. If address found in email -> SUCCESS.
-      //    2b. If no address -> ASK.
-
-      {
-        const status = orderData?.status?.toLowerCase() || "processing";
-        const isTooLate = ["shipped", "delivered", "out for delivery", "returned"].includes(status);
-
-        if (isTooLate) {
-          return templates.address_change_denied();
-        } else {
-          // Check if AI extracted an address (using entities passed from main loop)
-          // Note: We need to pass 'entities' to buildReply first. 
-          // Assuming entities.new_address is available
-
-          const newAddress = entities?.new_address;
-
-          if (newAddress) {
-            return templates.address_change_success(id, newAddress);
-          } else {
-            return templates.ask_new_address(id);
-          }
-        }
-      }
+      return templates.address_change_denied();
 
     case "return_exchange_request":
-      return templates.return_exchange();
+      return templates.return_exchange(id);
 
     case "invoice_request":
       return templates.invoice_shared(id);
@@ -435,7 +438,6 @@ function buildReply({ intent, risk, confidence, orderIds, decision, suggestedOrd
     case "payment_issue":
       return templates.agent_handoff_generic(id);
 
-    // Fallback
     default:
       if (confidence < 0.7) return templates.unclear_intent();
       return templates.agent_handoff_generic(id);
@@ -491,7 +493,9 @@ async function processEmails() {
 
         const decision = await decideRoute({ intent, confidence, risk });
 
-        console.log(`   🔸 Intent: ${intent} | Risk: ${risk} | Decision: ${decision.status}`);
+        console.log(
+          `   🔸 Intent: ${intent} | Risk: ${risk} | Decision: ${decision.status}`
+        );
 
         // 3. Extract Order IDs
         const text = `${email.subject || ""} ${email.bodyPreview || ""}`;
@@ -505,11 +509,9 @@ async function processEmails() {
           const customerOrders = await fetchCustomerOrders(senderEmail);
 
           if (customerOrders && customerOrders.length === 1) {
-            // Exact match found - auto use it
             suggestedOrder = customerOrders[0].order_id;
             console.log(`   ✅ Auto-inferred Order ID: ${suggestedOrder}`);
           } else if (customerOrders && customerOrders.length > 1) {
-            // Multiple match - ask user
             multipleOrders = customerOrders;
             console.log(`   ⚠️ Multiple orders found: ${customerOrders.length}`);
           } else {
@@ -539,7 +541,7 @@ async function processEmails() {
             confidence_score: confidence,
             decision_type: decision.status,
             reason_code: decision.owner,
-            model_version: "v1.0"
+            model_version: "v1.0",
           });
 
           if (risk) {
@@ -547,7 +549,7 @@ async function processEmails() {
               case_id: caseId,
               keyword_detected: riskRes.reason || "unknown",
               risk_level: "high",
-              action_taken: "escalated"
+              action_taken: "escalated",
             });
           }
         }
@@ -557,22 +559,16 @@ async function processEmails() {
         let orderData = null;
 
         if (finalOrderId) {
-          // Link to case
           if (caseId) {
             await apiCall("/case-orders", "POST", {
               case_id: caseId,
               order_id: finalOrderId,
-              is_valid: true
+              is_valid: true,
             });
           }
 
           // Fetch real status for dynamic reply
-          // If we already inferred it, we have it in multipleOrders/customerOrders usually, but let's be safe
-          if (suggestedOrder && multipleOrders && multipleOrders.length === 1) {
-            orderData = multipleOrders[0];
-          } else {
-            orderData = await fetchOrderById(finalOrderId);
-          }
+          orderData = await fetchOrderById(finalOrderId);
         }
 
         // 6. Build and Send Reply
@@ -584,8 +580,7 @@ async function processEmails() {
           decision,
           suggestedOrder,
           multipleOrders,
-          orderData, // Pass the full order object
-          entities: intentRes.entities // Pass extracted entities (new_address, etc.)
+          orderData,
         });
 
         const replySent = await sendReply(emailId, replyBody);
@@ -596,7 +591,7 @@ async function processEmails() {
             channel: "email",
             template_id: intent,
             message_status: "sent",
-            sent_at: new Date().toISOString()
+            sent_at: new Date().toISOString(),
           });
         }
 
@@ -605,9 +600,8 @@ async function processEmails() {
           entity_id: emailId.substring(0, 99),
           action: "processed",
           performed_by: "system",
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         });
-
       } catch (err) {
         console.error(`Email ${emailId} failed:`, err.message);
       }
